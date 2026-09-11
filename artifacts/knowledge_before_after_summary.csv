@@ -1,0 +1,3 @@
+strategy,mean_num_mutations,mean_predicted_fitness,mean_true_fitness,best_true_fitness,mean_prediction_error
+after_knowledge,4.0,2.307833074,3.2822138197445705,5.9987682548,-0.9743807457445701
+before_knowledge,17.4,-2.5214244216,-4.742970730336,-4.13648698384,2.221546308736

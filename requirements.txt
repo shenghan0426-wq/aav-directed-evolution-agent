@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+torch
+fair-esm
+openai
+python-dotenv
+pydantic
+matplotlib
+streamlit

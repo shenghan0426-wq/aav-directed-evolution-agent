@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+X_*_esm2_35M.npy
+two_vs_many.csv
+train.csv
+validation.csv
+test.csv
+artifacts/esm2_fitness_head.pt
+artifacts/observed_experiments.csv
+artifacts/test_esm2_mlp_predictions.csv

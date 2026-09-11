@@ -24,12 +24,20 @@ Main Python packages:
 - `matplotlib`
 - `streamlit`
 
-OpenAI API usage is optional. If LLM reasoning is enabled, create a `.env` file:
+## OpenAI API Configuration
+
+OpenAI API usage is optional for the small reproducible workflow. It is required
+only when running the LLM reasoning sections in `02_llm_agent.ipynb`,
+`03_knowledge_enhanced_agent.ipynb`, or the full `run_llm_agent.py` workflow.
+
+Create a local `.env` file in the project root:
 
 ```text
 OPENAI_API_KEY=your_api_key
-OPENAI_MODEL=your_model_name
+OPENAI_MODEL=gpt-5.6-luna
 ```
+
+`.env` is ignored by git and should not be uploaded to GitHub.
 
 ## Data Source
 
@@ -60,6 +68,31 @@ These sample files keep the same columns as the full data:
 
 Large files are ignored by `.gitignore`, including full datasets, ESM
 embeddings, model checkpoints, and private `.env` files.
+
+## Full Data And Model Files
+
+The main GitHub repository contains code, notebooks, small sample data, and
+small result files. Large files should be uploaded separately through a GitHub
+Release, for example as `full_data_and_models.zip`.
+
+After downloading and unzipping the release archive, the files should be placed
+at the following paths:
+
+| File | Location | Use |
+|---|---|---|
+| `train.csv` | project root | Historical experimental data used for training, history summarization, and Round 0 virtual evolution. |
+| `validation.csv` | project root | Validation split for model selection and baseline evaluation. |
+| `test.csv` | project root | Unknown candidate pool and virtual experimental evaluator with true fitness labels. |
+| `two_vs_many.csv` | project root | Full source AAV two-vs-many dataset used by the LLM Agent data loader. |
+| `X_train_esm2_35M.npy` | project root | Cached ESM-2 embeddings for the training split. |
+| `X_val_esm2_35M.npy` | project root | Cached ESM-2 embeddings for the validation split. |
+| `X_test_esm2_35M.npy` | project root | Cached ESM-2 embeddings for the test split. |
+| `artifacts/esm2_fitness_head.pt` | `artifacts/` | Trained MLP fitness head used with ESM-2 embeddings. |
+| `artifacts/test_esm2_mlp_predictions.csv` | `artifacts/` | Cached ESM2-MLP predictions for test candidates, used by the demo and comparisons. |
+
+The small workflow in `run_small_repro.py` does not require these release
+files. The full notebooks and full LLM/ESM command-line workflow require some
+or all of them.
 
 ## Project Structure
 
@@ -184,7 +217,7 @@ Important output files:
 
 ## GitHub Upload
 
-Create a new empty GitHub repository, then run:
+Create a new empty GitHub repository, then upload the lightweight project files:
 
 ```bash
 cd aav_baseline
@@ -206,6 +239,37 @@ git push -u origin main
 
 Do not upload `.env`, full datasets, ESM embeddings, or model checkpoints to
 the main repository.
+
+To provide the complete data/model package, create a release archive:
+
+```bash
+cd aav_baseline
+mkdir -p release_files/artifacts
+cp train.csv validation.csv test.csv two_vs_many.csv release_files/
+cp X_train_esm2_35M.npy X_val_esm2_35M.npy X_test_esm2_35M.npy release_files/
+cp artifacts/esm2_fitness_head.pt release_files/artifacts/
+cp artifacts/test_esm2_mlp_predictions.csv release_files/artifacts/
+cd release_files
+zip -r ../full_data_and_models.zip .
+cd ..
+```
+
+Then upload `full_data_and_models.zip` to GitHub:
+
+1. Open the repository page.
+2. Click `Releases`.
+3. Click `Draft a new release`.
+4. Set tag to `data-v1`.
+5. Set title to `Full data and model files`.
+6. Attach `full_data_and_models.zip`.
+7. Click `Publish release`.
+
+To restore the full workflow after cloning:
+
+```bash
+cd aav_baseline
+unzip full_data_and_models.zip -d .
+```
 
 ## External Tools
 

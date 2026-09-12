@@ -201,9 +201,12 @@ python -m unittest aav_baseline.test_llm_agent_core
   3.282 in the before/after comparison.
 - In the virtual directed-evolution simulation, the knowledge-enhanced LLM Agent
   reached a best true fitness of 6.262.
-- The original LLM Agent often selected candidates with too many mutations,
-  illustrating the importance of mutation-count constraints and biochemical
-  rules.
+- A feedback-driven LLM-agent strategy recomputes Critic feedback after each
+  virtual round. It reached mean true fitness values of 3.865, 2.154, and 2.987
+  across three rounds, outperforming the one-shot LLM recommendation baseline.
+- The one-shot LLM Agent often selected candidates with too many mutations,
+  illustrating the importance of feedback, mutation-count constraints, and
+  biochemical rules.
 
 Important output files:
 
@@ -212,6 +215,7 @@ Important output files:
 - `artifacts/knowledge_before_after_comparison.csv`
 - `artifacts/virtual_evolution_summary.csv`
 - `artifacts/virtual_evolution_topk_by_round.csv`
+- `artifacts/virtual_evolution_feedback_by_round.csv`
 - `artifacts/virtual_evolution_curve.png`
 - `artifacts/small_repro_recommendations.csv`
 
@@ -229,6 +233,7 @@ git add artifacts/knowledge_before_after_summary.csv
 git add artifacts/knowledge_before_after_comparison.csv
 git add artifacts/virtual_evolution_summary.csv
 git add artifacts/virtual_evolution_topk_by_round.csv
+git add artifacts/virtual_evolution_feedback_by_round.csv
 git add artifacts/virtual_evolution_curve.png
 git add artifacts/small_repro_recommendations.csv
 git commit -m "Add AAV directed evolution scientific agent"

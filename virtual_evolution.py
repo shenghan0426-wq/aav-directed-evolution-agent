@@ -6,6 +6,151 @@ import re
 import pandas as pd
 
 
+def mutation_positions(mutations) -> set[int]:
+    positions = set()
+    for mutation in mutations if isinstance(mutations, list) else []:
+        match = re.fullmatch(r"[A-Z](\d+)[A-Z]", str(mutation))
+        if match:
+            positions.add(int(match.group(1)))
+    return positions
+
+
+def _safe_rank(series: pd.Series) -> pd.Series:
+    if series.empty:
+        return series
+    if series.nunique(dropna=True) <= 1:
+        return pd.Series([0.5] * len(series), index=series.index)
+    return series.rank(pct=True).fillna(0.0)
+
+
+def summarize_feedback(
+    observed_df: pd.DataFrame,
+    fitness_col: str = "target",
+    top_quantile: float = 0.8,
+    bottom_quantile: float = 0.2,
+) -> dict:
+    if observed_df.empty or fitness_col not in observed_df.columns or "mutations" not in observed_df.columns:
+        return {
+            "successful_positions": [],
+            "failed_positions": [],
+            "successful_mutations": [],
+            "failed_mutations": [],
+            "fitness_threshold_high": None,
+            "fitness_threshold_low": None,
+        }
+
+    observed = observed_df.dropna(subset=[fitness_col]).copy()
+    if observed.empty:
+        return {
+            "successful_positions": [],
+            "failed_positions": [],
+            "successful_mutations": [],
+            "failed_mutations": [],
+            "fitness_threshold_high": None,
+            "fitness_threshold_low": None,
+        }
+    if "virtual_feedback_round" in observed.columns:
+        feedback_rounds = observed["virtual_feedback_round"].dropna()
+        feedback_rounds = feedback_rounds[feedback_rounds > 0]
+        if not feedback_rounds.empty:
+            observed = observed[observed["virtual_feedback_round"] == feedback_rounds.max()].copy()
+
+    high_threshold = float(observed[fitness_col].quantile(top_quantile))
+    low_threshold = float(observed[fitness_col].quantile(bottom_quantile))
+    successful = observed[observed[fitness_col] >= high_threshold]
+    failed = observed[observed[fitness_col] <= low_threshold]
+
+    successful_mutations = sorted(
+        {str(mutation) for mutations in successful["mutations"] if isinstance(mutations, list) for mutation in mutations}
+    )
+    failed_mutations = sorted(
+        {str(mutation) for mutations in failed["mutations"] if isinstance(mutations, list) for mutation in mutations}
+    )
+    successful_positions = sorted({position for mutations in successful["mutations"] for position in mutation_positions(mutations)})
+    failed_positions = sorted({position for mutations in failed["mutations"] for position in mutation_positions(mutations)})
+
+    return {
+        "successful_positions": successful_positions,
+        "failed_positions": failed_positions,
+        "successful_mutations": successful_mutations,
+        "failed_mutations": failed_mutations,
+        "fitness_threshold_high": high_threshold,
+        "fitness_threshold_low": low_threshold,
+    }
+
+
+def score_candidates_with_feedback(
+    candidate_df: pd.DataFrame,
+    feedback: dict,
+    max_mutations: int = 4,
+    predicted_col: str = "predicted_fitness",
+    knowledge_col: str = "knowledge_enhanced_score",
+) -> pd.DataFrame:
+    scored = candidate_df.copy()
+    if scored.empty:
+        return scored
+
+    successful_positions = set(feedback.get("successful_positions", []))
+    failed_positions = set(feedback.get("failed_positions", []))
+
+    scored["feedback_supported_positions"] = scored["mutations"].apply(
+        lambda mutations: len(mutation_positions(mutations) & successful_positions)
+    )
+    scored["feedback_failed_positions"] = scored["mutations"].apply(
+        lambda mutations: len(mutation_positions(mutations) & failed_positions)
+    )
+    scored["mutation_count_penalty"] = scored.get("num_mutations", pd.Series(0, index=scored.index)).apply(
+        lambda count: max(0, int(count) - max_mutations)
+    )
+    scored["feedback_score"] = (
+        scored["feedback_supported_positions"]
+        - 1.5 * scored["feedback_failed_positions"]
+        - 0.5 * scored["mutation_count_penalty"]
+    )
+
+    predicted_rank = _safe_rank(scored[predicted_col]) if predicted_col in scored.columns else pd.Series(0.0, index=scored.index)
+    knowledge_rank = _safe_rank(scored[knowledge_col]) if knowledge_col in scored.columns else pd.Series(0.0, index=scored.index)
+    feedback_rank = _safe_rank(scored["feedback_score"])
+    scored["feedback_agent_score"] = 0.60 * feedback_rank + 0.25 * predicted_rank + 0.15 * knowledge_rank
+    scored["critic_feedback"] = scored.apply(
+        lambda row: (
+            f"supported_positions={int(row['feedback_supported_positions'])}; "
+            f"failed_positions={int(row['feedback_failed_positions'])}; "
+            f"mutation_count_penalty={int(row['mutation_count_penalty'])}"
+        ),
+        axis=1,
+    )
+    return scored
+
+
+def build_feedback_driven_agent_strategy(
+    max_mutations: int = 4,
+    predicted_col: str = "predicted_fitness",
+    knowledge_col: str = "knowledge_enhanced_score",
+    fitness_col: str = "target",
+):
+    def strategy(observed_df: pd.DataFrame, candidate_df: pd.DataFrame, round_index: int, top_k: int) -> list[str]:
+        feedback = summarize_feedback(observed_df, fitness_col=fitness_col)
+        scored = score_candidates_with_feedback(
+            candidate_df,
+            feedback,
+            max_mutations=max_mutations,
+            predicted_col=predicted_col,
+            knowledge_col=knowledge_col,
+        )
+        constrained = scored[scored.get("num_mutations", 0) <= max_mutations].copy()
+        if constrained.empty:
+            constrained = scored
+        return (
+            constrained.sort_values(["feedback_agent_score", predicted_col], ascending=False)
+            .head(top_k)["candidate_id"]
+            .astype(str)
+            .tolist()
+        )
+
+    return strategy
+
+
 def select_random_candidates(candidate_ids, top_k: int = 10, seed: int | None = None) -> list:
     ids = list(candidate_ids)
     rng = random.Random(seed)
@@ -107,7 +252,9 @@ def simulate_iterative_evolution(
                 record["note"] = "Recommended by strategy, then evaluated by hidden virtual fitness."
                 rows.append(record)
 
-            observed = pd.concat([observed, selected], ignore_index=True, sort=False)
+            selected_for_history = selected.copy()
+            selected_for_history["virtual_feedback_round"] = round_index
+            observed = pd.concat([observed, selected_for_history], ignore_index=True, sort=False)
             remaining = remaining[~remaining["candidate_id"].isin(selected["candidate_id"])].copy()
 
     result = pd.DataFrame(rows)

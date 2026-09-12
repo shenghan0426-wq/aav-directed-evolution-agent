@@ -27,9 +27,11 @@ from aav_baseline.llm_agent_core import (
 from aav_baseline.model_evaluation import evaluate_predictions, one_hot_encode_regions, predict_with_fitness_head
 from aav_baseline.report_figures import summarize_rounds
 from aav_baseline.virtual_evolution import (
+    build_feedback_driven_agent_strategy,
     select_model_top_candidates,
     select_random_candidates,
     simulate_iterative_evolution,
+    summarize_feedback,
     summarize_recommended_positions,
 )
 from aav_baseline.app_demo import recommend_mutations_for_region
@@ -331,6 +333,51 @@ class LlmAgentCoreTest(unittest.TestCase):
         self.assertEqual(list(result["round"]), [0, 1, 2])
         self.assertEqual(list(result["candidate_id"]), ["initial_training_data", "cand_b", "cand_a"])
         self.assertEqual(list(result["fitness"]), [2.0, 4.0, 3.0])
+
+    def test_feedback_driven_agent_uses_previous_round_success_and_failure(self):
+        observed = pd.DataFrame(
+            [
+                {"candidate_id": "hist_good", "target": 8.0, "mutations": ["S578E"]},
+                {"candidate_id": "hist_bad", "target": -5.0, "mutations": ["D561A"]},
+            ]
+        )
+        candidates = pd.DataFrame(
+            [
+                {
+                    "candidate_id": "keeps_success",
+                    "mutations": ["S578D"],
+                    "num_mutations": 1,
+                    "predicted_fitness": 1.0,
+                    "knowledge_enhanced_score": 0.1,
+                },
+                {
+                    "candidate_id": "keeps_failure",
+                    "mutations": ["D561V"],
+                    "num_mutations": 1,
+                    "predicted_fitness": 5.0,
+                    "knowledge_enhanced_score": 1.0,
+                },
+            ]
+        )
+
+        strategy = build_feedback_driven_agent_strategy(max_mutations=4)
+        selected = strategy(observed, candidates, round_index=2, top_k=1)
+
+        self.assertEqual(selected, ["keeps_success"])
+
+    def test_summarize_feedback_prefers_latest_virtual_round(self):
+        observed = pd.DataFrame(
+            [
+                {"target": 10.0, "mutations": ["D561A"], "virtual_feedback_round": None},
+                {"target": 1.0, "mutations": ["S578D"], "virtual_feedback_round": 1},
+                {"target": 9.0, "mutations": ["T581E"], "virtual_feedback_round": 2},
+            ]
+        )
+
+        feedback = summarize_feedback(observed)
+
+        self.assertEqual(feedback["successful_positions"], [581])
+        self.assertEqual(feedback["failed_positions"], [581])
 
     def test_summarize_recommended_positions_counts_mutation_frequency_by_round(self):
         results = pd.DataFrame(

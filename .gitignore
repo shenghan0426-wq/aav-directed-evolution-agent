@@ -10,3 +10,5 @@ test.csv
 artifacts/esm2_fitness_head.pt
 artifacts/observed_experiments.csv
 artifacts/test_esm2_mlp_predictions.csv
+full_data_and_models.zip
+release_files/

@@ -4,6 +4,21 @@ import random
 import re
 
 import pandas as pd
+from pydantic import BaseModel
+
+
+class RoundCandidateDecision(BaseModel):
+    candidate_id: str
+    recommendation_reason: str
+
+
+class RoundCriticDecision(BaseModel):
+    selected: list[RoundCandidateDecision]
+    critic_feedback: str
+    successful_patterns: list[str]
+    failed_patterns: list[str]
+    next_round_strategy: str
+    limitations: str
 
 
 def mutation_positions(mutations) -> set[int]:
@@ -149,6 +164,180 @@ def build_feedback_driven_agent_strategy(
         )
 
     return strategy
+
+
+def build_round_candidate_records(candidate_df: pd.DataFrame, limit: int = 80) -> list[dict]:
+    columns = [
+        "candidate_id",
+        "mutations",
+        "num_mutations",
+        "predicted_fitness",
+        "knowledge_enhanced_score",
+        "feedback_score",
+        "feedback_agent_score",
+        "critic_feedback",
+    ]
+    available_columns = [column for column in columns if column in candidate_df.columns]
+    records = []
+    for _, row in candidate_df.head(limit)[available_columns].iterrows():
+        record = row.to_dict()
+        for key in ["predicted_fitness", "knowledge_enhanced_score", "feedback_score", "feedback_agent_score"]:
+            if key in record and pd.notna(record[key]):
+                record[key] = round(float(record[key]), 4)
+        if "num_mutations" in record and pd.notna(record["num_mutations"]):
+            record["num_mutations"] = int(record["num_mutations"])
+        if "mutations" in record and not isinstance(record["mutations"], list):
+            record["mutations"] = []
+        records.append(record)
+    return records
+
+
+def build_previous_round_records(observed_df: pd.DataFrame, fitness_col: str = "target", limit: int = 20) -> list[dict]:
+    if "virtual_feedback_round" not in observed_df.columns:
+        return []
+    feedback_rounds = observed_df["virtual_feedback_round"].dropna()
+    feedback_rounds = feedback_rounds[feedback_rounds > 0]
+    if feedback_rounds.empty:
+        return []
+
+    previous = observed_df[observed_df["virtual_feedback_round"] == feedback_rounds.max()].copy()
+    if fitness_col not in previous.columns:
+        return []
+    previous = previous.sort_values(fitness_col, ascending=False).head(limit)
+    records = []
+    for _, row in previous.iterrows():
+        records.append(
+            {
+                "candidate_id": str(row.get("candidate_id", "")),
+                "mutations": row.get("mutations", []),
+                "num_mutations": int(row.get("num_mutations", 0)),
+                "true_fitness": round(float(row[fitness_col]), 4),
+            }
+        )
+    return records
+
+
+def rule_based_round_critic_decision(candidate_records: list[dict], top_k: int = 10) -> RoundCriticDecision:
+    selected = [
+        RoundCandidateDecision(
+            candidate_id=str(record["candidate_id"]),
+            recommendation_reason=(
+                "Selected by fallback feedback-aware ranking because the OpenAI per-round call "
+                "was unavailable; prioritizes feedback-supported positions, model score, and low mutation count."
+            ),
+        )
+        for record in candidate_records[:top_k]
+    ]
+    return RoundCriticDecision(
+        selected=selected,
+        critic_feedback=(
+            "Fallback critic used structured previous-round feedback to bias candidate selection. "
+            "No natural-language OpenAI critique was generated."
+        ),
+        successful_patterns=[],
+        failed_patterns=[],
+        next_round_strategy=(
+            "Continue prioritizing candidates with feedback-supported positions, moderate predicted fitness, "
+            "and no more than the configured maximum mutation count."
+        ),
+        limitations="Fallback decision; no live OpenAI reasoning was used for this round.",
+    )
+
+
+def openai_round_critic_decision(
+    client,
+    model: str,
+    round_index: int,
+    previous_round_records: list[dict],
+    feedback: dict,
+    candidate_records: list[dict],
+    top_k: int = 10,
+    fallback_on_error: bool = True,
+) -> RoundCriticDecision:
+    prompt = f"""
+You are the per-round Scientific Critic and Mutation Designer for an AAV directed-evolution agent.
+
+This is virtual evolution round {round_index}. You must use previous experimental feedback to choose
+the next Top-{top_k} candidates from the supplied candidate list only.
+
+PREVIOUS ROUND TRUE-FITNESS RESULTS
+{previous_round_records}
+
+STRUCTURED FEEDBACK FROM OBSERVED RESULTS
+{feedback}
+
+AVAILABLE CANDIDATES
+{candidate_records}
+
+Instructions:
+- Select exactly {top_k} candidate IDs from AVAILABLE CANDIDATES.
+- Do not invent candidate IDs or fitness values.
+- Prefer candidates that preserve successful positions or mutations from previous feedback.
+- Avoid failed positions or high-risk high-mutation backgrounds unless there is a clear reason.
+- Explain what the Critic learned from the previous round and how it changes this round's recommendation.
+- Treat predicted_fitness as model output and true_fitness from previous rounds as experimental feedback.
+"""
+    try:
+        return client.responses.parse(model=model, input=prompt, text_format=RoundCriticDecision).output_parsed
+    except Exception:
+        if not fallback_on_error:
+            raise
+        return rule_based_round_critic_decision(candidate_records, top_k=top_k)
+
+
+def select_openai_feedback_candidates(
+    client,
+    model: str,
+    observed_df: pd.DataFrame,
+    available_candidates: pd.DataFrame,
+    round_index: int,
+    top_k: int = 10,
+    candidate_pool_size: int = 80,
+    max_mutations: int = 4,
+    predicted_col: str = "predicted_fitness",
+    knowledge_col: str = "knowledge_enhanced_score",
+    fitness_col: str = "target",
+) -> tuple[list[str], RoundCriticDecision, pd.DataFrame]:
+    feedback = summarize_feedback(observed_df, fitness_col=fitness_col)
+    scored = score_candidates_with_feedback(
+        available_candidates,
+        feedback,
+        max_mutations=max_mutations,
+        predicted_col=predicted_col,
+        knowledge_col=knowledge_col,
+    )
+    constrained = scored[scored.get("num_mutations", 0) <= max_mutations].copy()
+    if constrained.empty:
+        constrained = scored
+    ranked = constrained.sort_values(["feedback_agent_score", predicted_col], ascending=False).head(candidate_pool_size)
+    candidate_records = build_round_candidate_records(ranked, limit=candidate_pool_size)
+    previous_round_records = build_previous_round_records(observed_df, fitness_col=fitness_col)
+    decision = openai_round_critic_decision(
+        client,
+        model,
+        round_index,
+        previous_round_records,
+        feedback,
+        candidate_records,
+        top_k=top_k,
+    )
+
+    valid_ids = set(ranked["candidate_id"].astype(str))
+    selected_ids = []
+    for item in decision.selected:
+        candidate_id = str(item.candidate_id)
+        if candidate_id in valid_ids and candidate_id not in selected_ids:
+            selected_ids.append(candidate_id)
+        if len(selected_ids) >= top_k:
+            break
+    if len(selected_ids) < top_k:
+        for candidate_id in ranked["candidate_id"].astype(str):
+            if candidate_id not in selected_ids:
+                selected_ids.append(candidate_id)
+            if len(selected_ids) >= top_k:
+                break
+
+    return selected_ids, decision, ranked
 
 
 def select_random_candidates(candidate_ids, top_k: int = 10, seed: int | None = None) -> list:

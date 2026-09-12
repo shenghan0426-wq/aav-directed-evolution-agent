@@ -27,8 +27,11 @@ from aav_baseline.llm_agent_core import (
 from aav_baseline.model_evaluation import evaluate_predictions, one_hot_encode_regions, predict_with_fitness_head
 from aav_baseline.report_figures import summarize_rounds
 from aav_baseline.virtual_evolution import (
+    RoundCandidateDecision,
+    RoundCriticDecision,
     build_feedback_driven_agent_strategy,
     select_model_top_candidates,
+    select_openai_feedback_candidates,
     select_random_candidates,
     simulate_iterative_evolution,
     summarize_feedback,
@@ -378,6 +381,64 @@ class LlmAgentCoreTest(unittest.TestCase):
 
         self.assertEqual(feedback["successful_positions"], [581])
         self.assertEqual(feedback["failed_positions"], [581])
+
+    def test_openai_feedback_selector_uses_llm_selected_candidate_ids(self):
+        class FakeResponses:
+            def parse(self, **kwargs):
+                class Parsed:
+                    output_parsed = RoundCriticDecision(
+                        selected=[
+                            RoundCandidateDecision(candidate_id="B", recommendation_reason="LLM selected B"),
+                        ],
+                        critic_feedback="Previous round favored position 578.",
+                        successful_patterns=["S578"],
+                        failed_patterns=["D561"],
+                        next_round_strategy="Select B.",
+                        limitations="Fake test response.",
+                    )
+
+                return Parsed()
+
+        class FakeClient:
+            responses = FakeResponses()
+
+        observed = pd.DataFrame(
+            [
+                {"candidate_id": "prev", "target": 8.0, "mutations": ["S578E"], "num_mutations": 1},
+            ]
+        )
+        candidates = pd.DataFrame(
+            [
+                {
+                    "candidate_id": "A",
+                    "mutations": ["S578D"],
+                    "num_mutations": 1,
+                    "predicted_fitness": 9.0,
+                    "knowledge_enhanced_score": 1.0,
+                },
+                {
+                    "candidate_id": "B",
+                    "mutations": ["T581E"],
+                    "num_mutations": 1,
+                    "predicted_fitness": 1.0,
+                    "knowledge_enhanced_score": 0.1,
+                },
+            ]
+        )
+
+        selected_ids, decision, _ = select_openai_feedback_candidates(
+            FakeClient(),
+            "fake-model",
+            observed,
+            candidates,
+            round_index=1,
+            top_k=1,
+            candidate_pool_size=2,
+            max_mutations=4,
+        )
+
+        self.assertEqual(selected_ids, ["B"])
+        self.assertIn("Previous round", decision.critic_feedback)
 
     def test_summarize_recommended_positions_counts_mutation_frequency_by_round(self):
         results = pd.DataFrame(

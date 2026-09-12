@@ -202,8 +202,9 @@ python -m unittest aav_baseline.test_llm_agent_core
 - In the virtual directed-evolution simulation, the knowledge-enhanced LLM Agent
   reached a best true fitness of 6.262.
 - A feedback-driven LLM-agent strategy recomputes Critic feedback after each
-  virtual round. It reached mean true fitness values of 3.865, 2.154, and 2.987
-  across three rounds, outperforming the one-shot LLM recommendation baseline.
+  virtual round. When `OPENAI_API_KEY` is available, `04_virtual_evolution.ipynb`
+  also runs `openai_feedback_llm_agent`, which calls OpenAI once per round,
+  critiques previous true-fitness results, and selects the next Top-k candidates.
 - The one-shot LLM Agent often selected candidates with too many mutations,
   illustrating the importance of feedback, mutation-count constraints, and
   biochemical rules.
@@ -216,6 +217,8 @@ Important output files:
 - `artifacts/virtual_evolution_summary.csv`
 - `artifacts/virtual_evolution_topk_by_round.csv`
 - `artifacts/virtual_evolution_feedback_by_round.csv`
+- `artifacts/openai_virtual_evolution_feedback.csv`
+- `artifacts/openai_virtual_evolution_recommendations.csv`
 - `artifacts/virtual_evolution_curve.png`
 - `artifacts/small_repro_recommendations.csv`
 
@@ -234,6 +237,8 @@ git add artifacts/knowledge_before_after_comparison.csv
 git add artifacts/virtual_evolution_summary.csv
 git add artifacts/virtual_evolution_topk_by_round.csv
 git add artifacts/virtual_evolution_feedback_by_round.csv
+git add artifacts/openai_virtual_evolution_feedback.csv
+git add artifacts/openai_virtual_evolution_recommendations.csv
 git add artifacts/virtual_evolution_curve.png
 git add artifacts/small_repro_recommendations.csv
 git commit -m "Add AAV directed evolution scientific agent"
